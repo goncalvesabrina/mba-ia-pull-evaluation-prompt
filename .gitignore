@@ -45,6 +45,7 @@ ENV/
 *.log
 
 # Project specific
-screenshots/
+# screenshots/ - versionado de propósito: as capturas do LangSmith são
+# parte do entregável do desafio
 results/
 .claude/

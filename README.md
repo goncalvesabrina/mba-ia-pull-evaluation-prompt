@@ -284,11 +284,15 @@ esgotar a cota no meio de uma rodada.
 - **Prompt público v2:** https://smith.langchain.com/hub/sgoncalvesabrina/bug_to_user_story_v2
 - **Dashboard do projeto:** Projeto `prompt-optimization-challenge` em https://smith.langchain.com/
 - **Dataset de avaliação:** `prompt-optimization-challenge-eval`, com os 15 exemplos do `.jsonl` ✅ criado
-- **Screenshots:** adicionar em `screenshots/` as capturas da avaliação com as
-  notas ≥ 0.8 e o tracing detalhado de pelo menos 3 exemplos.
+- **Screenshots:** ver [`screenshots/`](screenshots/)
 
-O tracing de todas as 15 execuções ficou registrado no projeto
-`prompt-optimization-challenge`, já que `LANGSMITH_TRACING=true`.
+O tracing ficou registrado no projeto `prompt-optimization-challenge`, já que
+`LANGSMITH_TRACING=true`. O dashboard de Monitoring confirma a rodada completa:
+
+> **60 traces, 0 erros** — que é exatamente o volume esperado de uma avaliação
+> completa: 15 gerações do prompt + 45 chamadas de juiz (3 métricas × 15 exemplos).
+
+![Monitoring — Trace Count](screenshots/01-monitoring-traces.png)
 
 ---
 

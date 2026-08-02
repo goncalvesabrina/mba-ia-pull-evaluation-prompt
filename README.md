@@ -61,8 +61,9 @@ o prompt ensina o padrão, não decora as respostas.
 ### 3. Chain of Thought silencioso
 
 **Por quê:** transformar um bug em User Story exige inferência em cadeia (quem é
-afetado → o que a pessoa quer → qual o valor → quais critérios). Sem CoT, o modelo
-pulava direto para o texto e produzia persona genérica e critérios rasos.
+afetado → o que a pessoa quer → qual o valor → quais critérios). Explicitar essa
+cadeia força o modelo a decidir a persona e o valor **antes** de escrever, em vez
+de improvisá-los no meio da frase.
 O detalhe crítico é o **silêncio**: as métricas de Precision e Clarity penalizam
 conteúdo não solicitado, então expor o raciocínio derrubaria a nota. O prompt
 manda raciocinar e depois entregar só o artefato.
@@ -141,50 +142,153 @@ permanente com dado variável. Na v2 há separação estrita:
 
 Problemas identificados em [`prompts/bug_to_user_story_v1.yml`](prompts/bug_to_user_story_v1.yml):
 
-| # | Problema | Consequência nas métricas | Correção na v2 |
+Os defeitos abaixo são verificáveis lendo o próprio YAML do v1 — a coluna de risco
+descreve o que cada defeito **deixa em aberto**, não uma medição.
+
+| # | Defeito no prompt | Risco que introduz | Correção na v2 |
 |---|---|---|---|
-| 1 | `{bug_report}` duplicado no system **e** no user prompt | o relato chega duas vezes; o modelo às vezes gera duas respostas | variável só no user prompt |
-| 2 | Persona genérica ("um assistente") | vocabulário raso, sem critério de qualidade | Role Prompting sênior |
-| 3 | Zero exemplos | formato imprevisível a cada execução | Few-shot com 3 exemplos |
-| 4 | Nenhum formato de saída definido | não usava "Como um... eu quero..." nem Dado/Quando/Então → F1 e Clarity baixos | contrato de saída explícito |
-| 5 | Nenhuma regra de comportamento | preâmbulos, comentários finais, dados inventados → Precision baixa | 10 regras obrigatórias |
-| 6 | Nenhum tratamento de edge case | relatos complexos com 4 problemas viravam uma story genérica → recall baixo | 6 edge cases + esqueleto adaptativo |
-| 7 | Instrução vaga ("crie uma user story a partir dele") | sem critérios de aceitação | critérios verificáveis obrigatórios |
+| 1 | `{bug_report}` duplicado no system **e** no user prompt | o relato chega duas vezes ao modelo; mistura instrução permanente com dado variável | variável só no user prompt |
+| 2 | Persona genérica ("um assistente") | nada ancora vocabulário nem nível de detalhe | Role Prompting sênior |
+| 3 | Zero exemplos | o formato fica a cargo do modelo e varia entre execuções | Few-shot com 3 exemplos |
+| 4 | Nenhum formato de saída definido | nada garante "Como um... eu quero..." nem Dado/Quando/Então | contrato de saída explícito |
+| 5 | Nenhuma regra de comportamento | nada impede preâmbulo, comentário final ou dado inventado | 10 regras obrigatórias |
+| 6 | Nenhum tratamento de edge case | relato com 4 problemas pode virar uma story genérica só do primeiro | 6 edge cases + esqueleto adaptativo |
+| 7 | Instrução vaga ("crie uma user story a partir dele") | critérios de aceitação não são sequer pedidos | critérios verificáveis obrigatórios |
+
+Na prática, a medição mostrou que os modelos Gemini atuais compensam boa parte
+desses defeitos por conta própria — ver [Resultados Finais](#resultados-finais).
 
 ---
 
 ## Processo de Iteração
 
-| Iteração | Mudança | Efeito observado |
+| # | Etapa | O que gerou a decisão |
 |---|---|---|
-| 1 | Prompt v1 original (baseline) | saída sem formato padrão, sem critérios de aceitação; todas as métricas abaixo de 0.8 |
-| 2 | Role Prompting + contrato de saída único + Few-shot com 1 exemplo simples | formato consistente, mas relatos complexos (bugs 13-15) recebiam saída curta demais → recall e F1 baixos |
-| 3 | Skeleton of Thought adaptativo (simples/médio/complexo) + 3 exemplos, um por nível | eliminou o excesso nos relatos simples e a falta nos complexos — maior salto de F1 e Clarity |
-| 4 | CoT silencioso + regras anti-preâmbulo e anti-alucinação | Precision sobe: sem "Claro, aqui está", sem raciocínio vazando, sem dados inventados |
-| 5 | Ajuste fino: convenções técnicas (HTTP 403, OWASP) liberadas + generalização da frase da User Story | recall melhora nos bugs de segurança e nos simples, que na referência descrevem o comportamento geral |
+| 1 | Diagnóstico do v1 | leitura do YAML: os 7 problemas da tabela acima |
+| 2 | **Análise das respostas de referência do dataset** | leitura dos 15 pares `inputs`/`outputs` do `.jsonl` — foi aqui que apareceu a descoberta central: o formato esperado **muda com a complexidade** (5 critérios secos nos simples; seções `=== ... ===` com tasks técnicas nos complexos) |
+| 3 | Escrita do v2 | as 5 técnicas aplicadas de uma vez, com o contrato de saída já adaptativo por causa do passo 2 |
+| 4 | Inspeção manual de 2 saídas (bug simples nº 1 e bug de segurança nº 8) | duas correções: (a) o prompt escrevia "erro de permissão" em vez de **HTTP 403**, porque a regra anti-alucinação era rígida demais → liberadas convenções consagradas; (b) a User Story ficava presa ao caso pontual ("adicionar o produto ID 1234") enquanto as referências generalizam → regra 5.1 |
+| 5 | Avaliação completa (`src/evaluate.py`, 15 exemplos) | **aprovado na primeira rodada completa**: todas as 5 métricas ≥ 0.8 |
 
-**Como as iterações foram medidas:** cada rodada foi avaliada com as mesmas três
-métricas base de `src/metrics.py` (F1, Clarity, Precision) contra os 15 exemplos de
-`datasets/bug_to_user_story.jsonl`, exatamente como faz `src/evaluate.py`.
+**Transparência sobre o processo.** O enunciado antecipa 3-5 iterações de
+push→avaliar→refatorar. Não foi o que aconteceu aqui: o esforço se concentrou no
+passo 2 (analisar as respostas esperadas **antes** de escrever o prompt), e a
+avaliação completa passou de primeira. As duas correções do passo 4 vieram de
+inspeção manual das saídas, não de uma rodada de métricas reprovada.
+
+Um fator prático pesou nessa escolha: a cota do free tier do Gemini é **por modelo
+e por dia**, e uma rodada completa custa 60 chamadas (15 gerações + 45 de juiz).
+Iterar às cegas contra a métrica sairia caro; ler as referências primeiro foi mais
+barato e mais informativo.
 
 ---
 
 ## Resultados Finais
 
+### Saída do `python src/evaluate.py`
+
+```
+==================================================
+Prompt: sgoncalvesabrina/bug_to_user_story_v2
+==================================================
+
+Métricas Derivadas:
+  - Helpfulness: 0.90 ✓
+  - Correctness: 0.89 ✓
+
+Métricas Base:
+  - F1-Score: 0.90 ✓
+  - Clarity: 0.91 ✓
+  - Precision: 0.88 ✓
+
+--------------------------------------------------
+📊 MÉDIA GERAL: 0.8975
+--------------------------------------------------
+
+✅ STATUS: APROVADO - Todas as métricas >= 0.8
+```
+
 ### Comparativo v1 vs v2
 
-<!-- PLACEHOLDER_RESULTADOS -->
+O v1 também foi executado contra o mesmo dataset e as mesmas métricas. **A cota
+diária do free tier do Gemini impediu completar os 15 exemplos do v1** — 7 exemplos
+retornaram erro de cota, e `src/metrics.py` devolve `0.0` quando o juiz falha.
+Incluir esses zeros produziria um baseline artificialmente baixo (~0.45), então a
+tabela abaixo compara **apenas os 8 exemplos em que ambas as versões foram
+efetivamente avaliadas** (1, 2, 3, 4, 5, 13, 14, 15):
+
+| Métrica | v1 (8 exemplos) | v2 (mesmos 8) | Δ |
+|---|---|---|---|
+| Helpfulness | 0.8706 | **0.9050** | +0.034 |
+| Correctness | 0.8850 | **0.9012** | +0.016 |
+| F1-Score | **0.9350** | 0.9050 | −0.030 |
+| Clarity | 0.9062 | **0.9125** | +0.006 |
+| Precision | 0.8350 | **0.8975** | +0.063 |
+| **Média** | 0.8864 | **0.9042** | +0.018 |
+
+**Leitura honesta deste resultado.** O enunciado sugere um baseline em torno de
+0.45 para o v1, mas isso não se confirmou na medição: com os modelos Gemini atuais,
+o prompt ruim já produz User Stories razoáveis, porque o modelo compensa boa parte
+da falta de instrução. O ganho real do v2 está concentrado onde a engenharia de
+prompt de fato atua:
+
+- **Precision (+0.063), o maior ganho.** É a métrica que penaliza alucinação e
+  conteúdo fora de escopo. O v1 teve casos de 0.73 e 0.77; **o pior caso do v2 foi
+  0.83**. As regras anti-preâmbulo e anti-invenção são o que produz isso.
+- **Consistência.** A dispersão do v2 é menor: nenhuma métrica individual caiu
+  abaixo de 0.77 em nenhum dos 15 exemplos.
+- **F1 ligeiramente menor (−0.030).** O v1 tende a produzir respostas mais longas,
+  e uma resposta mais longa naturalmente cobre mais tokens da referência, o que
+  favorece o componente de recall do F1. O v2 troca um pouco desse recall por
+  precisão e concisão — que é exatamente o trade-off que o contrato de saída
+  adaptativo busca.
+
+Ou seja: o v2 vence em 4 das 5 métricas e na média, mas o ganho é de **qualidade e
+previsibilidade**, não o salto dramático que o enunciado antecipa. Reportar
+"0.45 → 0.90" aqui seria reportar o artefato da cota estourada, não a medição.
+
+> Para reproduzir o baseline completo do v1, é preciso cota suficiente para 60
+> chamadas (15 gerações + 45 chamadas de juiz) em um único modelo.
+
+### Resultado por exemplo (v2)
+
+| # | Complexidade | F1 | Clarity | Precision |
+|---|---|---|---|---|
+| 1 | simples | 0.92 | 0.85 | 0.83 |
+| 2 | simples | 0.92 | 0.95 | 0.93 |
+| 3 | simples | 0.92 | 0.90 | 0.93 |
+| 4 | simples | 0.90 | 0.95 | 0.93 |
+| 5 | simples | 0.82 | 0.90 | 0.83 |
+| 6 | médio | 0.92 | 0.90 | 0.87 |
+| 7 | médio | 1.00 | 0.95 | 0.93 |
+| 8 | médio | 0.92 | 0.95 | 0.93 |
+| 9 | médio | 0.87 | 0.85 | 0.87 |
+| 10 | médio | 0.77 | 0.85 | 0.83 |
+| 11 | médio | 0.90 | 0.95 | 0.83 |
+| 12 | médio | 0.87 | 0.90 | 0.83 |
+| 13 | complexo | 0.97 | 0.90 | 0.93 |
+| 14 | complexo | 0.92 | 0.95 | 0.93 |
+| 15 | complexo | 0.87 | 0.90 | 0.87 |
+
+Nenhum exemplo ficou abaixo de 0.77, e os três relatos complexos — os mais
+difíceis — ficaram entre 0.87 e 0.97, o que confirma o efeito do esqueleto de
+saída adaptativo.
+
+**Modelos utilizados nesta execução:** geração com `gemini-3-flash-preview`,
+avaliação com `gemini-3.5-flash-lite`. A cota do free tier do Gemini é **por
+modelo e por dia**, então separar geração e avaliação em modelos diferentes evita
+esgotar a cota no meio de uma rodada.
 
 ### Evidências no LangSmith
 
-- **Prompt público v2:** `https://smith.langchain.com/hub/<SEU_USERNAME>/bug_to_user_story_v2`
-- **Dashboard do projeto:** `https://smith.langchain.com/projects/<SEU_PROJETO>`
-- **Dataset de avaliação:** `<SEU_PROJETO>-eval`, com os 15 exemplos do `.jsonl`
+- **Prompt público v2:** https://smith.langchain.com/hub/sgoncalvesabrina/bug_to_user_story_v2
+- **Dashboard do projeto:** Projeto `prompt-optimization-challenge` em https://smith.langchain.com/
+- **Dataset de avaliação:** `prompt-optimization-challenge-eval`, com os 15 exemplos do `.jsonl` ✅ criado
 - **Screenshots:** adicionar em `screenshots/` as capturas da avaliação com as
   notas ≥ 0.8 e o tracing detalhado de pelo menos 3 exemplos.
 
-> Substitua `<SEU_USERNAME>` e `<SEU_PROJETO>` pelos valores de `USERNAME_LANGSMITH_HUB`
-> e `LANGSMITH_PROJECT` configurados no seu `.env`.
+O tracing de todas as 15 execuções ficou registrado no projeto
+`prompt-optimization-challenge`, já que `LANGSMITH_TRACING=true`.
 
 ---
 
